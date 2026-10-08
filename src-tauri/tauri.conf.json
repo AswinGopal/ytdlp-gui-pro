@@ -1,0 +1,32 @@
+{
+  "productName": "ytdownloader",
+  "identifier": "com.ytdownloader.app",
+  "build": {
+    "frontendDist": "../src-frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "ytdownloader",
+        "width": 1450,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "../icon.ico"
+    ]
+  }
+}

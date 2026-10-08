@@ -1,0 +1,174 @@
+# .github/workflows/release.yml
+#
+# Triggers:
+#   • git tag push  →  git tag v1.2.3 && git push origin v1.2.3
+#                      git tag v1.2.3-beta.1 && git push origin v1.2.3-beta.1
+#   • GitHub UI     →  Actions → Release → Run workflow → enter version
+#
+# Pre-release detection: any version containing a hyphen (e.g. 1.2.3-beta.1)
+# is published as a pre-release; bare x.y.z versions are published as stable.
+#
+# Artifact storage is not used. Each build runner publishes its binary
+# directly to the GitHub release via softprops/action-gh-release.
+# A create-tag job runs first on workflow_dispatch to create the git tag
+# before the matrix starts, avoiding a race between runners.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.2.3 or 1.2.3-beta.1) — tag will be created'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  TAURI_CLI_VERSION: "2.11.3"
+
+jobs:
+  # ── Create tag (workflow_dispatch only) ──────────────────────────────────────
+  # Creates the git tag at HEAD before the build matrix starts so both runners
+  # have a tag to publish against without racing to create it themselves.
+  # Skipped entirely on tag-push runs (the tag already exists in git).
+  create-tag:
+    name: Create tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate and create tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+            echo "::error::Version '$VERSION' does not match x.y.z or x.y.z-suffix"
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+
+          # Fail fast if the tag already exists rather than silently overwriting.
+          if gh api "repos/${{ github.repository }}/git/refs/tags/${TAG}" \
+               --silent 2>/dev/null; then
+            echo "::error::Tag '$TAG' already exists"
+            exit 1
+          fi
+
+          gh api "repos/${{ github.repository }}/git/refs" \
+            --method POST \
+            --field ref="refs/tags/${TAG}" \
+            --field sha="${{ github.sha }}"
+
+          echo "Created tag ${TAG} at ${{ github.sha }}"
+
+  # ── Build + publish ───────────────────────────────────────────────────────────
+  build:
+    name: Build — ${{ matrix.platform }}
+    needs: [create-tag]
+    # Passes when create-tag succeeded (workflow_dispatch) or was skipped (tag push).
+    if: always() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            binary: ytdownloader-gui
+            artifact: ytdownloader-linux
+            tauri_asset: cargo-tauri-x86_64-unknown-linux-gnu.tgz   # confirmed
+
+          - os: windows-latest
+            platform: windows
+            binary: ytdownloader-gui.exe
+            artifact: ytdownloader-windows.exe
+            tauri_asset: cargo-tauri-x86_64-pc-windows-msvc.zip     # inferred — verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Tauri v2 on Linux requires these GTK / WebKit headers at compile time.
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # Caches ~/.cargo/registry and src-tauri/target across runs.
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: ${{ matrix.platform }}
+
+      - name: Install Tauri CLI
+        shell: bash
+        run: |
+          BASE="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${TAURI_CLI_VERSION}"
+          ASSET="${{ matrix.tauri_asset }}"
+          curl -fL "${BASE}/${ASSET}" -o tauri-cli-asset
+          case "${ASSET}" in
+            *.tgz|*.tar.gz) tar -xz -f tauri-cli-asset -C ~/.cargo/bin ;;
+            *.zip)          unzip -o tauri-cli-asset -d ~/.cargo/bin    ;;
+          esac
+          rm tauri-cli-asset
+
+      # --no-bundle skips .deb / .AppImage / .msi / .dmg — binary only.
+      # Output: src-tauri/target/release/{binary}
+      - name: Build binary
+        run: cargo tauri build --no-bundle
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "src-tauri/target/release/${{ matrix.binary }}" \
+             "dist/${{ matrix.artifact }}"
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          TAG="v${VERSION}"
+          [[ "$VERSION" == *-* ]] && PRE=true || PRE=false
+
+          echo "tag=$TAG"        >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
+
+      # The first runner to reach this step creates the release; the second
+      # appends its binary. generate_release_notes is a no-op on the second
+      # call since the release already exists.
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: dist/${{ matrix.artifact }}

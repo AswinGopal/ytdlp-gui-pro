@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ytdownloader</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <header>
+    <h1>ytdownloader</h1>
+    <span>powered by yt-dlp</span>
+    <button type="button" id="settings-btn" class="icon-btn header-gear" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path
+          d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
+  </header>
+
+  <div id="deno-warning" class="hidden">
+    ⚠️ Deno not found — some YouTube format options may be unavailable.
+  </div>
+
+  <nav>
+    <button class="active" data-tab="download">Download</button>
+    <button data-tab="history">History</button>
+  </nav>
+
+  <!-- ── DOWNLOAD TAB ── -->
+  <div class="panel active" id="tab-download">
+
+    <section class="add-section">
+      <h2>Add New URL</h2>
+      <div class="add-row">
+        <label for="url">Video URL:</label>
+        <input type="text" id="url" placeholder="Paste a video URL…" autocomplete="off" spellcheck="false" />
+        <button type="button" id="add-btn" class="btn btn-primary btn-add">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Add to Queue
+        </button>
+      </div>
+      <span id="status"></span>
+    </section>
+
+    <section class="queue-section">
+      <h2 id="queue-title">Download Queue (0 items)</h2>
+      <div id="queue-list" class="queue-list"></div>
+      <p id="queue-empty" class="queue-empty">The queue is empty. Paste a video URL above and add it.</p>
+    </section>
+
+    <div class="queue-bar">
+      <label class="check">
+        <input type="checkbox" id="queue-select-all" disabled />
+        <span>Select all</span>
+      </label>
+      <button type="button" id="remove-selected-btn" class="btn btn-secondary btn-sm" disabled>Remove Selected</button>
+    </div>
+
+  </div>
+
+  <!-- ── HISTORY TAB ── -->
+  <div class="panel" id="tab-history">
+    <div class="history-bar">
+      <label class="check">
+        <input type="checkbox" id="history-select-all" disabled />
+        <span>Select all</span>
+      </label>
+      <button type="button" id="history-redownload-selected" class="btn btn-secondary btn-sm" disabled>Re-download
+        Selected</button>
+      <button type="button" id="clear-history-btn" class="btn btn-danger btn-sm" disabled>Clear History</button>
+      <span id="history-note" class="history-note"></span>
+    </div>
+    <div id="history-list"></div>
+  </div>
+
+  <!-- ── SETTINGS ── -->
+  <dialog id="settings-dialog">
+    <div class="dialog-head">
+      <h2>Settings</h2>
+      <button type="button" id="settings-close" class="icon-btn" aria-label="Close settings" title="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 6L6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <section class="settings-section">
+      <h3>yt-dlp</h3>
+      <p class="hint">Check for and install the latest yt-dlp release from GitHub.</p>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary btn-sm" id="update-btn">Update yt-dlp</button>
+        <span id="update-status"></span>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3>Download folder</h3>
+      <p class="hint">Used by every download that has no folder of its own. Changing it does not move downloads
+        already in progress.</p>
+      <div id="dl-dir-row">
+        <span id="dl-dir-display"></span>
+        <button type="button" class="btn btn-secondary btn-sm" id="dl-dir-change-btn">Change</button>
+        <button type="button" class="btn btn-secondary btn-sm btn-muted" id="dl-dir-reset-btn">Reset</button>
+      </div>
+      <span id="dl-dir-status"></span>
+    </section>
+
+    <section class="settings-section">
+      <h3>Quality dropdown</h3>
+      <p class="hint">Choose which entries each queue row offers. The container, codec and resolution filters narrow
+        the format list; the format a row has selected always stays visible.</p>
+      <div id="menu-controls"></div>
+      <div id="menu-error" class="menu-error"></div>
+    </section>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+
+</html>

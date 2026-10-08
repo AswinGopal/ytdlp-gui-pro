@@ -1,0 +1,10 @@
+# Rust build artifacts
+target/
+
+# Tauri generated schemas (recreated on build)
+src-tauri/gen/
+src-tauri/target/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
