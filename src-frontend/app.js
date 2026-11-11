@@ -19,6 +19,16 @@ async function main() {
     if (!ok) $('deno-warning').classList.remove('hidden');
   });
 
+  // The header label stays hidden if the version cannot be read: it is
+  // informational, so a failure must not get in the way of the app.
+  api.appVersion()
+    .then(version => {
+      const label = $('app-version');
+      label.textContent = `v${version}`;
+      label.classList.remove('hidden');
+    })
+    .catch(console.error);
+
   await initSettings();
   // After a re-download the new rows are the point, so go and show them.
   initHistory({

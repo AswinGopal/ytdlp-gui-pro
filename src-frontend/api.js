@@ -31,6 +31,9 @@ export const api = {
   resetDownloadDir: () => invoke('cmd_reset_download_dir'),
   updateYtdlp: () => invoke('cmd_update_ytdlp'),
   checkDeno: () => invoke('cmd_check_deno'),
+
+  // App
+  appVersion: () => invoke('cmd_app_version'),
 };
 
 /** Subscribes to queue events; resolves once the listener is registered. */

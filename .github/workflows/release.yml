@@ -1,9 +1,22 @@
 # .github/workflows/release.yml
 #
-# Triggers:
-#   • git tag push  →  git tag v1.2.3 && git push origin v1.2.3
-#                      git tag v1.2.3-beta.1 && git push origin v1.2.3-beta.1
-#   • GitHub UI     →  Actions → Release → Run workflow → enter version
+# The application version lives in exactly one place: the `version` field of
+# src-tauri/Cargo.toml. Tauri bakes it into the binary at build time and the
+# UI reads it back from there, so the version a release is published under and
+# the version the program shows cannot drift apart.
+#
+# Releasing:
+#   1. Bump `version` in src-tauri/Cargo.toml and commit it together with the
+#      src-tauri/Cargo.lock change Cargo makes on the next build.
+#   2. Then either
+#        • git tag v1.2.3 && git push origin v1.2.3
+#          git tag v1.2.3-beta.1 && git push origin v1.2.3-beta.1
+#        • GitHub UI → Actions → Release → Run workflow
+#          (tags the selected commit as v<Cargo.toml version>)
+#
+# The workflow fails before building anything when the version is not valid
+# semver (x.y.z or x.y.z-prerelease; no build metadata) or when a pushed tag
+# is not exactly `v` + the Cargo.toml version.
 #
 # Pre-release detection: any version containing a hyphen (e.g. 1.2.3-beta.1)
 # is published as a pre-release; bare x.y.z versions are published as stable.
@@ -20,63 +33,103 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version (e.g. 1.2.3 or 1.2.3-beta.1) — tag will be created'
-        required: true
-        type: string
 
 env:
   CARGO_TERM_COLOR: always
   TAURI_CLI_VERSION: "2.11.3"
 
 jobs:
+  # ── Resolve version ──────────────────────────────────────────────────────────
+  # Reads the version from src-tauri/Cargo.toml, validates it, and, on a tag
+  # push, checks the pushed tag against it. Every later job takes its version,
+  # tag and pre-release flag from this job's outputs.
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read and validate version
+        id: resolve
+        shell: bash
+        run: |
+          # semver.org's reference pattern, without the build-metadata part.
+          SEMVER_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?$'
+
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("src-tauri/Cargo.toml", "rb"))["package"]["version"])')"
+
+          if ! [[ "$VERSION" =~ $SEMVER_RE ]]; then
+            echo "::error::Version '$VERSION' in src-tauri/Cargo.toml is not valid semver (x.y.z or x.y.z-prerelease)"
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_NAME" != "$TAG" ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' does not match src-tauri/Cargo.toml (expected '$TAG')"
+            exit 1
+          fi
+
+          [[ "$VERSION" == *-* ]] && PRE=true || PRE=false
+
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "prerelease=$PRE"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing ${TAG} (prerelease=${PRE})"
+
   # ── Create tag (workflow_dispatch only) ──────────────────────────────────────
-  # Creates the git tag at HEAD before the build matrix starts so both runners
-  # have a tag to publish against without racing to create it themselves.
-  # Skipped entirely on tag-push runs (the tag already exists in git).
+  # Creates the git tag at the dispatched commit before the build matrix starts
+  # so both runners have a tag to publish against without racing to create it
+  # themselves. Skipped entirely on tag-push runs (the tag already exists).
   create-tag:
     name: Create tag
+    needs: [version]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Validate and create tag
+      - name: Create tag
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
-          VERSION="${{ inputs.version }}"
-
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
-            echo "::error::Version '$VERSION' does not match x.y.z or x.y.z-suffix"
-            exit 1
-          fi
-
-          TAG="v${VERSION}"
-
           # Fail fast if the tag already exists rather than silently overwriting.
-          if gh api "repos/${{ github.repository }}/git/refs/tags/${TAG}" \
+          if gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" \
                --silent 2>/dev/null; then
             echo "::error::Tag '$TAG' already exists"
             exit 1
           fi
 
-          gh api "repos/${{ github.repository }}/git/refs" \
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
             --method POST \
             --field ref="refs/tags/${TAG}" \
-            --field sha="${{ github.sha }}"
+            --field sha="${GITHUB_SHA}"
 
-          echo "Created tag ${TAG} at ${{ github.sha }}"
+          echo "Created tag ${TAG} at ${GITHUB_SHA}"
 
   # ── Build + publish ───────────────────────────────────────────────────────────
   build:
     name: Build — ${{ matrix.platform }}
-    needs: [create-tag]
-    # Passes when create-tag succeeded (workflow_dispatch) or was skipped (tag push).
-    if: always() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
+    needs: [version, create-tag]
+    # Passes when the version resolved and create-tag succeeded (workflow_dispatch)
+    # or was skipped (tag push).
+    if: >-
+      always()
+      && needs.version.result == 'success'
+      && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -134,6 +187,8 @@ jobs:
           rm tauri-cli-asset
 
       # --no-bundle skips .deb / .AppImage / .msi / .dmg — binary only.
+      # The binary's version is src-tauri/Cargo.toml's, the same one the
+      # `version` job validated above.
       # Output: src-tauri/target/release/{binary}
       - name: Build binary
         run: cargo tauri build --no-bundle
@@ -145,30 +200,14 @@ jobs:
           cp "src-tauri/target/release/${{ matrix.binary }}" \
              "dist/${{ matrix.artifact }}"
 
-      - name: Resolve release metadata
-        id: meta
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-
-          TAG="v${VERSION}"
-          [[ "$VERSION" == *-* ]] && PRE=true || PRE=false
-
-          echo "tag=$TAG"        >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
-
       # The first runner to reach this step creates the release; the second
       # appends its binary. generate_release_notes is a no-op on the second
       # call since the release already exists.
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.tag }}
-          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
           generate_release_notes: true
           files: dist/${{ matrix.artifact }}

@@ -192,6 +192,17 @@ async fn cmd_check_deno() -> bool {
         .unwrap_or(false)
 }
 
+// ── App ──────────────────────────────────────────────────────────────────────
+
+/// The application version Tauri baked in at build time: the `version` of
+/// `src-tauri/Cargo.toml`, since `tauri.conf.json` sets none. The release
+/// workflow validates that same field, so this is the version a release is
+/// published under.
+#[tauri::command]
+fn cmd_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -224,6 +235,7 @@ fn main() {
             cmd_reset_download_dir,
             cmd_update_ytdlp,
             cmd_check_deno,
+            cmd_app_version,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
